@@ -110,8 +110,13 @@ public actor IPMIClient {
             return SensorRow(name: meta.name, valueKind: .unavailable, status: "na")
         }
 
-        let unavailable = response.data.count >= 2 && (response.data[1] & 0x20) != 0
-        if unavailable {
+        // 参考 ipmitool: data[1] 同时包含 Reading/Scanning 状态
+        // bit5(0x20)=reading unavailable
+        // bit6(0x40)=sensor scanning enabled（为 0 表示 disabled）
+        let readingState = response.data.count >= 2 ? response.data[1] : 0
+        let readingUnavailable = (readingState & 0x20) != 0
+        let scanningDisabled = (readingState & 0x40) == 0
+        if readingUnavailable || scanningDisabled {
             return SensorRow(name: meta.name, valueKind: .unavailable, status: "na")
         }
 
