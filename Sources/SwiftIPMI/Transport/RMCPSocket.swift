@@ -17,7 +17,9 @@ public enum RMCPSocketError: Error, Sendable {
 public actor RMCPSocket: RMCPSocketProtocol {
     private let connection: NWConnection
 
-    public init(host: String, port: UInt16) throws {
+    private let defaultTimeout: TimeInterval
+
+    public init(host: String, port: UInt16, defaultTimeout: TimeInterval = 3.0) throws {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw RMCPSocketError.connectionFailed("invalid port: \(port)")
         }
@@ -34,74 +36,76 @@ public actor RMCPSocket: RMCPSocketProtocol {
         let parameters = NWParameters.udp
         parameters.allowLocalEndpointReuse = true
         self.connection = NWConnection(host: endpointHost, port: nwPort, using: parameters)
+        self.defaultTimeout = defaultTimeout
         self.connection.start(queue: .global(qos: .userInitiated))
     }
 
     public func send(_ data: [UInt8]) async throws {
         let conn = connection
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await Self.sendOnce(data, via: conn)
-            }
-
-            group.addTask {
-                try await Task.sleep(nanoseconds: 3_000_000_000)
-                throw RMCPSocketError.sendFailed("timeout after 3.0s")
-            }
-
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
-        }
+        try await Self.sendOnce(data, via: conn, timeout: defaultTimeout)
     }
 
     public func receive(timeout: TimeInterval? = nil) async throws -> [UInt8] {
         let conn = connection
-
-        if let timeout, timeout > 0 {
-            return try await withThrowingTaskGroup(of: [UInt8].self) { group in
-                group.addTask {
-                    try await Self.receiveOnce(from: conn)
-                }
-
-                group.addTask {
-                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                    throw RMCPSocketError.receiveFailed("timeout after \(timeout)s")
-                }
-
-                let result: [UInt8] = try await group.next()!
-                group.cancelAll()
-                return result
-            }
-        }
-
-        return try await Self.receiveOnce(from: conn)
+        return try await Self.receiveOnce(from: conn, timeout: timeout ?? defaultTimeout)
     }
 
-    private nonisolated static func sendOnce(_ data: [UInt8], via connection: NWConnection) async throws {
+    private nonisolated static func sendOnce(_ data: [UInt8], via connection: NWConnection, timeout: TimeInterval) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let lock = NSLock()
+            var isResolved = false
+
+            func resolve(_ result: Result<Void, Error>) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !isResolved else { return }
+                isResolved = true
+                continuation.resume(with: result)
+            }
+
             connection.send(content: Data(data), completion: .contentProcessed { error in
                 if let error {
-                    continuation.resume(throwing: RMCPSocketError.sendFailed(String(describing: error)))
-                    return
+                    resolve(.failure(RMCPSocketError.sendFailed(String(describing: error))))
+                } else {
+                    resolve(.success(()))
                 }
-                continuation.resume(returning: ())
             })
+
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                resolve(.failure(RMCPSocketError.sendFailed("timeout after \(timeout)s")))
+            }
         }
     }
 
-    private nonisolated static func receiveOnce(from connection: NWConnection) async throws -> [UInt8] {
+    private nonisolated static func receiveOnce(from connection: NWConnection, timeout: TimeInterval?) async throws -> [UInt8] {
         try await withCheckedThrowingContinuation { continuation in
+            let lock = NSLock()
+            var isResolved = false
+
+            func resolve(_ result: Result<[UInt8], Error>) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !isResolved else { return }
+                isResolved = true
+                continuation.resume(with: result)
+            }
+
             connection.receiveMessage { data, _, _, error in
                 if let error {
-                    continuation.resume(throwing: RMCPSocketError.receiveFailed(String(describing: error)))
+                    resolve(.failure(RMCPSocketError.receiveFailed(String(describing: error))))
                     return
                 }
                 guard let data, !data.isEmpty else {
-                    continuation.resume(throwing: RMCPSocketError.noData)
+                    resolve(.failure(RMCPSocketError.noData))
                     return
                 }
-                continuation.resume(returning: Array(data))
+                resolve(.success(Array(data)))
+            }
+
+            if let timeout, timeout > 0 {
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                    resolve(.failure(RMCPSocketError.receiveFailed("timeout after \(timeout)s")))
+                }
             }
         }
     }

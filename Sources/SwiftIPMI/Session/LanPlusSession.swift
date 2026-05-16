@@ -16,6 +16,7 @@ public actor LanPlusSession {
     private let password: String
     private let privilege: PrivilegeLevel
     private let cipherSuiteID: UInt8?
+    private let timeout: TimeInterval
     private let logger: VerboseLogger
     private var connected = false
     private var managedSystemSessionID: UInt32?
@@ -33,6 +34,7 @@ public actor LanPlusSession {
         password: String,
         privilege: PrivilegeLevel,
         cipherSuiteID: UInt8?,
+        timeout: TimeInterval = 3.0,
         loggingEnabled: Bool,
         socket: RMCPSocketProtocol? = nil
     ) {
@@ -42,11 +44,12 @@ public actor LanPlusSession {
         self.password = password
         self.privilege = privilege
         self.cipherSuiteID = cipherSuiteID
+        self.timeout = timeout
         self.logger = VerboseLogger(isEnabled: loggingEnabled)
         if let socket {
             self.socket = socket
         } else {
-            self.socket = try! RMCPSocket(host: host, port: port)
+            self.socket = try! RMCPSocket(host: host, port: port, defaultTimeout: timeout)
         }
     }
 
@@ -63,7 +66,7 @@ public actor LanPlusSession {
         let probe = buildGetChannelAuthenticationCapabilitiesRequest()
         logger.logHexDump(prefix: ">> RMCP v1.5 probe", bytes: probe)
         try await socket.send(probe)
-        let probeResponse = try await socket.receive(timeout: 3.0)
+        let probeResponse = try await socket.receive(timeout: timeout)
         logger.logHexDump(prefix: "<< RMCP v1.5 probe response", bytes: probeResponse)
         _ = try parseGetChannelAuthenticationCapabilitiesResponse(probeResponse)
 
@@ -79,7 +82,7 @@ public actor LanPlusSession {
         logger.logHexDump(prefix: ">> OPEN SESSION REQUEST", bytes: openRequestBytes)
 
         try await socket.send(buildRMCPPlusPacket(payloadType: 0x10, sessionID: 0, sessionSequence: 0, payload: openRequestBytes))
-        let openPacket = try await socket.receive(timeout: 3.0)
+        let openPacket = try await socket.receive(timeout: timeout)
         logger.logHexDump(prefix: "<< OPEN SESSION RESPONSE PACKET", bytes: openPacket)
         let openPayload = try parseRMCPPlusPacket(openPacket, expectedPayloadType: 0x11)
 
@@ -113,7 +116,7 @@ public actor LanPlusSession {
         logger.logHexDump(prefix: ">> RAKP1 MESSAGE", bytes: rakp1Bytes)
 
         try await socket.send(buildRMCPPlusPacket(payloadType: 0x12, sessionID: 0, sessionSequence: 0, payload: rakp1Bytes))
-        let rakp2Packet = try await socket.receive(timeout: 3.0)
+        let rakp2Packet = try await socket.receive(timeout: timeout)
         logger.logHexDump(prefix: "<< RAKP2 MESSAGE PACKET", bytes: rakp2Packet)
         let rakp2Payload = try parseRMCPPlusPacket(rakp2Packet, expectedPayloadType: 0x13)
 
@@ -149,8 +152,8 @@ public actor LanPlusSession {
         // 在会话激活前（RAKP 阶段），RMCP+ 头部 Session ID / Sequence 应为 0。
         // 若这里带入 managedSystemSessionID，部分 iDRAC 会直接丢弃 RAKP3，不返回 RAKP4。
         try await socket.send(buildRMCPPlusPacket(payloadType: 0x14, sessionID: 0, sessionSequence: 0, payload: rakp3Bytes))
-        logger.log("waiting for RAKP4 packet (timeout 3.0s)")
-        let rakp4Packet = try await socket.receive(timeout: 3.0)
+        logger.log("waiting for RAKP4 packet (timeout \(timeout)s)")
+        let rakp4Packet = try await socket.receive(timeout: timeout)
         logger.logHexDump(prefix: "<< RAKP4 MESSAGE PACKET", bytes: rakp4Packet)
         let rakp4Payload = try parseRMCPPlusPacket(rakp4Packet, expectedPayloadType: 0x15)
 
@@ -214,7 +217,7 @@ public actor LanPlusSession {
             logger.logHexDump(prefix: ">> IPMI Request Packet", bytes: packet)
 
             try await socket.send(packet)
-            let responsePacket = try await socket.receive(timeout: 3.0)
+            let responsePacket = try await socket.receive(timeout: timeout)
             logger.logHexDump(prefix: "<< IPMI Response Packet", bytes: responsePacket)
 
             let response = try parseEncryptedRMCPPlusIPMIResponse(responsePacket)

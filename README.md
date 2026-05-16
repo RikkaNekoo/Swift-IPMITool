@@ -31,7 +31,6 @@ struct DemoApp {
             privilege: .administrator,
             cipherSuiteID: nil,
             timeout: 2.0,
-            retries: 4,
             loggingEnabled: false
         )
 

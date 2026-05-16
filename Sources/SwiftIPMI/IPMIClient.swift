@@ -29,10 +29,9 @@ public actor IPMIClient {
         privilege: PrivilegeLevel = .administrator,
         cipherSuiteID: UInt8? = nil,
         timeout: TimeInterval = 2.0,
-        retries: Int = 4,
         loggingEnabled: Bool = false
     ) {
-        _ = (timeout, retries)
+        _ = (timeout)
         self.session = LanPlusSession(
             host: host,
             port: port,
@@ -40,6 +39,7 @@ public actor IPMIClient {
             password: password,
             privilege: privilege,
             cipherSuiteID: cipherSuiteID,
+            timeout: timeout,
             loggingEnabled: loggingEnabled
         )
     }

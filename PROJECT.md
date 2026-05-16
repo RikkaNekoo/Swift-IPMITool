@@ -172,8 +172,7 @@ public actor IPMIClient {
                 privilege: PrivilegeLevel = .administrator,
                 cipherSuiteID: UInt8? = nil,           // nil = 自动协商
                 timeout: TimeInterval = 2.0,
-                retries: Int = 4,
-                verbosity: Verbosity = .quiet)
+                loggingEnabled: Bool = false)
 
     public func connect() async throws
     public func close() async
